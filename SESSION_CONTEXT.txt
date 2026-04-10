@@ -1,0 +1,185 @@
+CHESS REMAKE — SESSION CONTEXT
+================================
+Last updated: 2026-04-10
+
+PROJECT GOAL
+------------
+Online multiplayer chess in Python. Two milestones per CLAUDE.md:
+  1. Standard chess with all legal rules (DONE — current state)
+  2. Later: mod the game for an assignment (DO NOT implement until asked)
+
+The rules engine in shared/ must stay overridable so mods can change
+representation, rules, space, time, uncertainty, or number of players
+without touching client/server code.
+
+TECH STACK
+----------
+- Client:  Python + Pygame
+- Server:  FastAPI + uvicorn + WebSockets
+- Engine:  python-chess wrapped behind shared/engine.py
+- Tests:   pytest
+- Lint:    ruff (line-length=99, select=E,F,I,N,W)
+- Types:   mypy (disallow_untyped_defs=true; pygame.* ignored)
+- Python:  3.11+ (venv uses python3)
+
+REPO LAYOUT
+-----------
+chess_remake/
+├── CLAUDE.md                  # project instructions
+├── requirements.txt           # python-chess, pygame, fastapi, uvicorn,
+│                              #   websockets, pydantic, pytest, ruff, mypy
+├── pyproject.toml             # ruff/mypy/pytest config
+├── SESSION_CONTEXT.txt        # this file
+├── client/
+│   ├── main.py                # Pygame ChessClient, async WS loop
+│   ├── renderer.py            # BoardRenderer — loads PNGs, has fallback
+│   └── assets/pieces/         # wK.png … bP.png (12 files, user-provided)
+├── server/
+│   └── main.py                # FastAPI /ws endpoint, matchmaking, sessions
+├── shared/
+│   ├── engine.py              # ChessEngine + GameResult (wraps python-chess)
+│   └── models.py              # Pydantic message schemas + parse_client_message
+└── tests/
+    └── test_engine.py         # 32 tests, all passing
+
+CURRENT STATUS
+--------------
+- All 32 tests pass:  `pytest tests/ -q` → 32 passed
+- Ruff clean:         `ruff check .` → All checks passed!
+- Mypy clean:         `mypy shared/ server/` → Success: no issues found in 5 source files
+- Client renderer loads PNG images from client/assets/pieces/ on startup
+  (scales to 85% of square size), with a colored-circle+letter fallback
+  if any image is missing.
+- All 12 PNG files are in place in client/assets/pieces/.
+
+RUNNING THE GAME
+----------------
+  source venv/bin/activate
+  uvicorn server.main:app --reload         # terminal 1
+  python -m client.main                    # terminal 2
+  python -m client.main                    # terminal 3 (auto-pairs with #2)
+
+Server listens on ws://localhost:8000/ws. Window is 860x640 (640 board +
+220 sidebar). Two clients auto-pair via the matchmaking queue.
+
+KEY ARCHITECTURE NOTES
+----------------------
+shared/engine.py
+  - ChessEngine wraps python-chess.Board
+  - GameResult(winner: Optional[bool], reason: str)
+    winner True=white, False=black, None=draw
+  - game_result() returns GameResult for checkmate / stalemate /
+    insufficient material / fivefold repetition / 75-move rule.
+    It does NOT auto-return for claimable draws (50-move, threefold) —
+    those require can_claim_draw() + an explicit claim.
+  - is_promotion_move(from_sq, to_sq) + promotion_move(..., promotion)
+  - Static square helpers (square, square_file, square_rank, etc.)
+
+shared/models.py
+  - Pydantic v2 discriminated unions on "type" field
+  - Client→Server: JoinQueue, MakeMove(uci), Resign, OfferDraw,
+    AcceptDraw, DeclineDraw, ClaimDraw
+  - Server→Client: QueueWaiting, GameStart(color, fen, game_id),
+    GameState(fen, last_move, is_check, turn, legal_moves, move_stack,
+    can_claim_draw), GameOver(winner, reason, fen), MoveError,
+    DrawOffered, DrawDeclined, ServerError
+  - parse_client_message(data) routes dict → correct model
+
+server/main.py
+  - Globals: waiting_queue (deque), active_games (dict),
+    ws_to_game (id(ws) → game_id)
+  - GameSession holds ChessEngine + two PlayerConnection objects +
+    draw_offer_from (color that offered)
+  - try_pair() pairs two queued sockets, sends GameStart + broadcasts state
+  - handle_move / resign / draw_offer / accept_draw / decline_draw /
+    claim_draw
+  - Disconnect handling: forfeit to opponent, cleanup session
+  - /health returns {"status": "ok"}
+  - Uses Literal["white", "black"] for winner field (mypy fix)
+
+client/main.py
+  - ChessClient: engine (shared), renderer, WS connection, selection/drag
+    state, promotion state, draw offer state
+  - flipped = True when playing black
+  - Async recv_messages with 0.001s poll timeout inside pygame loop
+  - Sidebar buttons: resign, offer_draw, claim_draw, accept_draw,
+    decline_draw, new_game
+  - Calls self.renderer.load_assets() in __init__ after BoardRenderer()
+
+client/renderer.py
+  - BoardRenderer.load_assets() loads 12 PNGs via
+    pygame.image.load(path).convert_alpha() + smoothscale to
+    int(square_size * 0.85). On any missing file or load failure,
+    returns early so _images_loaded stays False and fallback is used.
+  - _draw_piece() uses loaded image if available, else
+    _draw_fallback_glyph() (colored circle with letter K/Q/R/B/N/P).
+  - draw_board / draw_pieces / draw_dragging_piece / draw_highlights /
+    draw_promotion_dialog all go through _draw_piece.
+  - square_to_pixel / pixel_to_square handle board flipping for black.
+
+PIECE ASSETS
+------------
+client/assets/pieces/ contains user-provided PNGs:
+  wK.png wQ.png wR.png wB.png wN.png wP.png
+  bK.png bQ.png bR.png bB.png bN.png bP.png
+
+USER PREFERENCES / FEEDBACK OBSERVED
+------------------------------------
+- User does not play chess — use standard/official rules; explain
+  chess-specific concepts when needed.
+- User prefers to download/manage asset files themselves when
+  auto-download tooling runs into SSL/cert/etc issues. Ask where to
+  put files rather than fighting download errors.
+- Persistent memory rules (from ~/.claude/.../memory):
+  * No egg installs — use requirements.txt, not editable installs
+  * Assignment context: standard chess first, mods later
+
+TESTS (tests/test_engine.py, 32 tests)
+--------------------------------------
+- TestBasicMoves: initial position, push/pop, legal/illegal,
+  FEN roundtrip, move stack
+- TestCheck: Scholar's mate, check-not-mate
+- TestStalemate: classic position
+- TestCastling: kingside, queenside, blocked through check
+- TestEnPassant: FEN rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR
+  w KQkq d6 0 3
+- TestPromotion: detection, queen, knight, non-promotion.
+  IMPORTANT: uses FEN 7k/4P3/8/8/8/8/8/4K3 (black king on h8, NOT e8 —
+  earlier tests failed because king on e8 blocked the promotion square).
+- TestDrawConditions: K vs K, K vs KB, K vs KR, 50-move rule
+  (halfmove=100), threefold repetition via knight shuffles
+- TestGameResult, TestSquareHelpers, TestPieceMap
+
+KNOWN GOTCHAS / PRIOR FIXES
+---------------------------
+- `python` not found on macOS — use `python3` for venv creation.
+- Unicode chess glyphs do not render on this Mac's system fonts
+  (segoeuisymbol/arial unicode ms/dejavu sans lacked them) — showed
+  as empty rectangles. Fixed by switching to PNG images with letter
+  fallback.
+- mypy: GameOver winner needs Literal["white", "black"], not plain
+  Optional[str]. See server/main.py _game_over_msg.
+- ruff: keep lines ≤ 99 chars. Common culprits are long docstrings
+  and ternary assignments — split into if/else.
+- pyproject.toml: mypy override only for pygame.*. Do not re-add a
+  chess.* override (unused → warning).
+
+WHAT'S NEXT
+-----------
+1. User visual verification that PNGs render correctly (requires them
+   restarting clients; nothing for Claude to do until they report back).
+2. If rendering is good, milestone 1 is effectively complete.
+3. Milestone 2 (game mods) is DEFERRED — do not start until user
+   explicitly asks. When they do, the rules engine abstraction in
+   shared/engine.py is the extension point: subclass ChessEngine and
+   override the relevant methods (move generation, win conditions,
+   piece movement, etc.).
+
+USEFUL COMMANDS
+---------------
+  pytest tests/ -q                    # run tests
+  ruff check .                        # lint
+  ruff check --fix .                  # lint + autofix
+  mypy shared/ server/                # type check
+  uvicorn server.main:app --reload    # run server
+  python -m client.main               # run client
