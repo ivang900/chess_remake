@@ -121,6 +121,13 @@ class ChessClient:
         # Wheel of Fate overlay
         self.wheel = WheelOverlay(radius=170)
 
+        # Blocks duplicate MakeMove sends while waiting for the server's
+        # response (spin_result / game_state / move_error). Without this,
+        # a rapid second click lands on the pre-response state where the
+        # client still thinks it's our turn, and the server then rejects
+        # the stale move with "Not your turn".
+        self.move_in_flight = False
+
         # Buttons
         btn_x = BOARD_PX + 10
         btn_w = SIDEBAR_W - 20
@@ -194,6 +201,7 @@ class ChessClient:
             self.last_move_uci = data.get("last_move")
             self.move_stack = data.get("move_stack", [])
             self.can_claim_draw = data.get("can_claim_draw", False)
+            self.move_in_flight = False
             turn = "White" if data["turn"] == "white" else "Black"
             if self.is_my_turn:
                 self.status_text = "Your turn"
@@ -202,6 +210,7 @@ class ChessClient:
 
         elif msg_type == "game_over":
             self.game_active = False
+            self.move_in_flight = False
             winner = data.get("winner")
             reason = data.get("reason", "")
             self.engine.set_fen(data["fen"])
@@ -216,6 +225,7 @@ class ChessClient:
             self.legal_targets = []
 
         elif msg_type == "move_error":
+            self.move_in_flight = False
             self.status_text = f"Error: {data.get('message', '')}"
 
         elif msg_type == "draw_offered":
@@ -270,6 +280,12 @@ class ChessClient:
         if not self.is_my_turn:
             return
 
+        # Waiting on the server to acknowledge our previous move. Without
+        # this guard, a fast double-click sends a second move against a
+        # stale "still my turn" view and the server rejects it.
+        if self.move_in_flight:
+            return
+
         sq = self.renderer.pixel_to_square(x, y, self.flipped)
         if sq is None:
             self.selected_sq = None
@@ -294,7 +310,7 @@ class ChessClient:
             self.legal_targets = []
 
     async def handle_mouse_up(self, pos: tuple[int, int]) -> None:
-        if self.wheel.active:
+        if self.wheel.active or self.move_in_flight:
             self.dragging_sq = None
             self.dragging_piece = None
             return
@@ -321,6 +337,7 @@ class ChessClient:
             return
 
         uci = chess.Move(from_sq, to_sq).uci()
+        self.move_in_flight = True
         await self.send_msg(MakeMove(uci=uci).model_dump())
         self.selected_sq = None
         self.legal_targets = []
@@ -337,6 +354,7 @@ class ChessClient:
             if rect.collidepoint(pos):
                 move = chess.Move(self.pending_promo_from or 0,
                                   self.pending_promo_to, promotion=piece_type)
+                self.move_in_flight = True
                 await self.send_msg(MakeMove(uci=move.uci()).model_dump())
                 self.showing_promo_dialog = False
                 self.pending_promo_from = None

@@ -83,15 +83,22 @@ class GameSession:
             w = "black"
         return GameOver(winner=w, reason=reason, fen=self.engine.fen()).model_dump()
 
+    async def _send_to(self, player: "PlayerConnection", msg: dict) -> None:  # type: ignore[type-arg]
+        """Send to one player, swallowing failures so the other still gets it."""
+        try:
+            await player.send(msg)
+        except Exception:
+            pass
+
+    async def broadcast(self, msg: dict) -> None:  # type: ignore[type-arg]
+        await self._send_to(self.white, msg)
+        await self._send_to(self.black, msg)
+
     async def broadcast_state(self) -> None:
-        msg = self._game_state_msg()
-        await self.white.send(msg)
-        await self.black.send(msg)
+        await self.broadcast(self._game_state_msg())
 
     async def broadcast_game_over(self, winner: Optional[bool], reason: str) -> None:
-        msg = self._game_over_msg(winner, reason)
-        await self.white.send(msg)
-        await self.black.send(msg)
+        await self.broadcast(self._game_over_msg(winner, reason))
 
 
 # -- Global state -------------------------------------------------------------
@@ -166,8 +173,7 @@ async def handle_move(session: GameSession, player: PlayerConnection, uci: str) 
             triggered_by_uci=uci,
             spin_id=uuid.uuid4().hex[:12],
         ).model_dump()
-        await session.white.send(spin_msg)
-        await session.black.send(spin_msg)
+        await session.broadcast(spin_msg)
 
         if outcome == "go_again":
             session.engine.keep_turn()
