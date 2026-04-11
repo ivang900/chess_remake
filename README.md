@@ -1,3 +1,14 @@
+## Wheel of Fate mod
+
+This build ships with the **Wheel of Fate** mod, which subverts the operational rule that players strictly alternate turns.
+
+**Rule:** whenever a player captures a piece, a wheel spins in the center of the board:
+
+- **40%** — *Go again.* The same player gets another move (and if that move is also a capture, they spin again).
+- **60%** — *Turn ends.* Normal turn handoff.
+
+A player can deliver checkmate on a bonus move. The server is authoritative on the spin result; both clients see the same animation.
+
 ## Fresh setup
 
 Clone the repo:

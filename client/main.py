@@ -13,6 +13,7 @@ import websockets
 from websockets.asyncio.client import ClientConnection
 
 from client.renderer import BoardRenderer
+from client.wheel import WheelOverlay
 from shared.engine import ChessEngine
 from shared.models import (
     AcceptDraw,
@@ -116,6 +117,9 @@ class ChessClient:
         # Move list
         self.move_stack: list[str] = []
         self.last_move_uci: Optional[str] = None
+
+        # Wheel of Fate overlay
+        self.wheel = WheelOverlay(radius=170)
 
         # Buttons
         btn_x = BOARD_PX + 10
@@ -225,6 +229,17 @@ class ChessClient:
         elif msg_type == "server_error":
             self.status_text = f"Server: {data.get('message', '')}"
 
+        elif msg_type == "spin_result":
+            outcome = data.get("outcome", "end_turn")
+            spinner = data.get("spinner", "white")
+            spin_id = data.get("spin_id", "")
+            self.wheel.trigger(outcome, spinner, spin_id)
+            # Clear any drag state — the board is locked while the wheel spins.
+            self.selected_sq = None
+            self.legal_targets = []
+            self.dragging_sq = None
+            self.dragging_piece = None
+
     # -- Input handling -------------------------------------------------------
 
     def get_legal_targets(self, from_sq: int) -> list[int]:
@@ -238,6 +253,10 @@ class ChessClient:
 
     async def handle_click(self, pos: tuple[int, int]) -> None:
         x, y = pos
+
+        # Wheel of Fate overlay blocks all input while spinning
+        if self.wheel.active:
+            return
 
         # Promotion dialog takes priority
         if self.showing_promo_dialog:
@@ -275,6 +294,10 @@ class ChessClient:
             self.legal_targets = []
 
     async def handle_mouse_up(self, pos: tuple[int, int]) -> None:
+        if self.wheel.active:
+            self.dragging_sq = None
+            self.dragging_piece = None
+            return
         if self.dragging_sq is None:
             return
 
@@ -386,6 +409,13 @@ class ChessClient:
 
         # Sidebar
         self.draw_sidebar(mouse_pos)
+
+        # Wheel of Fate overlay — drawn LAST so it sits on top of everything
+        self.wheel.update()
+        if self.wheel.active:
+            cx = BOARD_PX // 2
+            cy = BOARD_PX // 2
+            self.wheel.draw(self.screen, cx, cy, WINDOW_W, WINDOW_H)
 
         pygame.display.flip()
 

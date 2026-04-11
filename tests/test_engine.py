@@ -3,7 +3,7 @@
 import chess
 import pytest
 
-from shared.engine import ChessEngine, GameResult
+from shared.engine import ChessEngine, GameResult, SpinChessEngine
 
 
 class TestBasicMoves:
@@ -240,6 +240,79 @@ class TestSquareHelpers:
     def test_square_construction(self) -> None:
         sq = ChessEngine.square(4, 3)  # file=4, rank=3 = e4
         assert sq == chess.E4
+
+
+class TestSpinEngine:
+    """Wheel of Fate mod: captures trigger a spin, keep_turn hands back the move."""
+
+    def test_is_capture_detects_capture_before_push(self) -> None:
+        # 1.e4 d5 — white can capture d5 with exd5
+        engine = SpinChessEngine()
+        engine.push_uci("e2e4")
+        engine.push_uci("d7d5")
+        move = engine.parse_uci("e4d5")
+        assert move is not None
+        assert engine.is_capture(move) is True
+
+    def test_is_capture_false_on_quiet_move(self) -> None:
+        engine = SpinChessEngine()
+        move = engine.parse_uci("e2e4")
+        assert move is not None
+        assert engine.is_capture(move) is False
+
+    def test_last_move_was_capture(self) -> None:
+        engine = SpinChessEngine()
+        engine.push_uci("e2e4")
+        assert engine.last_move_was_capture() is False
+        engine.push_uci("d7d5")
+        assert engine.last_move_was_capture() is False
+        engine.push_uci("e4d5")
+        assert engine.last_move_was_capture() is True
+
+    def test_last_move_was_capture_en_passant(self) -> None:
+        engine = SpinChessEngine(
+            "rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3"
+        )
+        engine.push_uci("e5d6")  # en passant
+        assert engine.last_move_was_capture() is True
+
+    def test_keep_turn_flips_side_back(self) -> None:
+        engine = SpinChessEngine()
+        engine.push_uci("e2e4")
+        assert engine.turn is False  # black to move after push
+        engine.keep_turn()
+        assert engine.turn is True  # back to white
+
+    def test_keep_turn_clears_en_passant_target(self) -> None:
+        # White pushes pawn two squares, creating en passant target on e3.
+        # After keep_turn, white cannot self-capture en passant.
+        engine = SpinChessEngine()
+        engine.push_uci("e2e4")
+        # python-chess exposes ep_square on the underlying board
+        assert engine._board.ep_square == chess.E3
+        engine.keep_turn()
+        assert engine._board.ep_square is None
+
+    def test_keep_turn_allows_same_player_to_move_again(self) -> None:
+        """After keep_turn, legal moves reflect the side that just moved."""
+        engine = SpinChessEngine()
+        engine.push_uci("e2e4")   # white moved
+        engine.push_uci("d7d5")   # black moved — regular turn
+        engine.push_uci("e4d5")   # white captures on d5; turn now black's
+        assert engine.turn is False
+        engine.keep_turn()
+        assert engine.turn is True
+        # White should now have legal moves available
+        moves = engine.legal_moves()
+        assert len(moves) > 0
+        # And one of them should be a white piece move (e.g., the d5 pawn)
+        assert any(m.from_square == chess.D5 for m in moves)
+
+    def test_spin_engine_is_chess_engine(self) -> None:
+        """SpinChessEngine keeps all standard chess behavior."""
+        engine = SpinChessEngine()
+        assert isinstance(engine, ChessEngine)
+        assert len(engine.legal_moves()) == 20
 
 
 class TestPieceMap:

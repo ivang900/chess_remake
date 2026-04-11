@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import random
 import uuid
 from collections import deque
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-from shared.engine import ChessEngine
+from shared.engine import SpinChessEngine
 from shared.models import (
     DrawDeclined,
     DrawOffered,
@@ -18,8 +19,13 @@ from shared.models import (
     MoveError,
     QueueWaiting,
     ServerError,
+    SpinResult,
     parse_client_message,
 )
+
+# -- Wheel of Fate mod --------------------------------------------------------
+
+SPIN_GO_AGAIN_PROB = 0.40  # 40% bonus move, 60% end turn
 
 app = FastAPI(title="Chess Server")
 
@@ -42,7 +48,7 @@ class GameSession:
 
     def __init__(self, game_id: str, white: WebSocket, black: WebSocket) -> None:
         self.game_id = game_id
-        self.engine = ChessEngine()
+        self.engine = SpinChessEngine()
         self.white = PlayerConnection(white, True)
         self.black = PlayerConnection(black, False)
         self.draw_offer_from: Optional[bool] = None  # color that offered a draw
@@ -138,15 +144,35 @@ async def handle_move(session: GameSession, player: PlayerConnection, uci: str) 
         await player.send(MoveError(message=f"Illegal move: {uci}").model_dump())
         return
 
+    # Detect capture BEFORE pushing (board state is needed).
+    was_capture = session.engine.is_capture(move)
+
     session.engine.push(move)
     session.draw_offer_from = None  # clear any pending draw offer after a move
 
+    # Check for game end first — captures on the final move don't spin.
     result = session.engine.game_result()
     if result:
         await session.broadcast_game_over(result.winner, result.reason)
         cleanup_game(session.game_id)
-    else:
-        await session.broadcast_state()
+        return
+
+    # Wheel of Fate: spin only on captures.
+    if was_capture:
+        outcome = "go_again" if random.random() < SPIN_GO_AGAIN_PROB else "end_turn"
+        spin_msg = SpinResult(
+            spinner="white" if player.color else "black",
+            outcome=outcome,  # type: ignore[arg-type]
+            triggered_by_uci=uci,
+            spin_id=uuid.uuid4().hex[:12],
+        ).model_dump()
+        await session.white.send(spin_msg)
+        await session.black.send(spin_msg)
+
+        if outcome == "go_again":
+            session.engine.keep_turn()
+
+    await session.broadcast_state()
 
 
 async def handle_resign(session: GameSession, player: PlayerConnection) -> None:

@@ -107,12 +107,26 @@ class ServerError(BaseModel):
     message: str
 
 
+class SpinResult(BaseModel):
+    """Wheel-of-Fate spin result, broadcast after a capture.
+
+    The wheel has 40% "go again" and 60% "end turn". The server is
+    authoritative on the outcome; both clients animate the wheel to
+    land on this result.
+    """
+    type: Literal["spin_result"] = "spin_result"
+    spinner: Literal["white", "black"]  # who just captured
+    outcome: Literal["go_again", "end_turn"]
+    triggered_by_uci: str  # the capturing move
+    spin_id: str  # unique per spin, for client dedup
+
+
 # -- Discriminated union for parsing ------------------------------------------
 
 ClientMessage = JoinQueue | MakeMove | Resign | OfferDraw | AcceptDraw | DeclineDraw | ClaimDraw
 ServerMessage = (
     QueueWaiting | GameStart | GameState | GameOver
-    | MoveError | DrawOffered | DrawDeclined | ServerError
+    | MoveError | DrawOffered | DrawDeclined | ServerError | SpinResult
 )
 
 

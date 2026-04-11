@@ -213,3 +213,43 @@ class ChessEngine:
     @staticmethod
     def square_rank(square: int) -> int:
         return chess.square_rank(square)
+
+
+class SpinChessEngine(ChessEngine):
+    """Chess engine with the 'Wheel of Fate' mod.
+
+    Captures trigger a spin (handled by the server). On a successful
+    spin, the server calls :meth:`keep_turn` to hand the same player
+    another move instead of passing the turn.
+    """
+
+    def is_capture(self, move: chess.Move) -> bool:
+        """True if *move* would capture a piece in the current position.
+
+        Must be called BEFORE pushing the move.
+        """
+        return self._board.is_capture(move)
+
+    def last_move_was_capture(self) -> bool:
+        """True if the most recently pushed move was a capture.
+
+        Inspects the move stack to reconstruct pre-move state.
+        """
+        if not self._board.move_stack:
+            return False
+        last = self._board.move_stack[-1]
+        # Temporarily pop to check capture status against prior state.
+        self._board.pop()
+        was_capture = self._board.is_capture(last)
+        self._board.push(last)
+        return was_capture
+
+    def keep_turn(self) -> None:
+        """Flip the side-to-move back to the player who just moved.
+
+        Called after a successful spin. Clears the en passant target
+        square so the player cannot capture their own just-created
+        en passant pawn on the bonus move.
+        """
+        self._board.turn = not self._board.turn
+        self._board.ep_square = None
